@@ -1,0 +1,74 @@
+name: Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint HTML
+        run: |
+          set -x
+          grep -qF "<!DOCTYPE html>" index.html
+          grep -qF "</html>" index.html
+          grep -qF "Сычева Виктория Сергеевна" index.html
+          grep -qF "М8О-101БВ-26" index.html
+          grep -qF "twalley" index.html
+          echo "HTML lint OK"
+
+      - name: Build Docker image
+        if: always()
+        run: |
+          set -x
+          docker build -t site:test .
+
+      - name: Smoke test container
+        if: always()
+        run: |
+          set -x
+          docker run -d -p 8080:80 --name smoke site:test
+          sleep 5
+          curl -s http://localhost:8080 > page.html
+          grep -qF "Сычева Виктория Сергеевна" page.html
+          grep -qF "М8О-101БВ-26" page.html
+          grep -qF "twalley" page.html
+          echo OK
+          docker rm -f smoke
+
+  release:
+    needs: ci
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase repo name
+        id: lower
+        run: echo "repo=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ steps.lower.outputs.repo }}:latest
+            ghcr.io/${{ steps.lower.outputs.repo }}:${{ github.sha }}
